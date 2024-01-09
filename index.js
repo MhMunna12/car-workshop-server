@@ -63,7 +63,14 @@ async function run() {
 
         //SERVICE ROUTES
         app.get('/services', async (req, res) => {
-            const cursor = serviceCollection.find();
+            const search = req.query.search;
+            const query = {
+                title: { $regex: search, $options: 'i' }
+            };
+            const options = {
+                sort: { 'price': 1 }
+            };
+            const cursor = serviceCollection.find(query, options);
             const result = await cursor.toArray();
             res.send(result);
         })
