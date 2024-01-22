@@ -3,7 +3,10 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
-
+const SSLCommerzPayment = require('sslcommerz-lts');
+const store_id = process.env.STORE_ID;
+const store_passwd = process.env.STORE_PASS;
+const is_live = false;
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -95,12 +98,81 @@ async function run() {
         })
         //booking
         app.post('/booking', async (req, res) => {
-            const booking = req.body
-            // console.log(booking);
-            const result = await bookingCollection.insertOne(booking);
-            res.send(result);
+            const booking = req.body;
+            const bookingService = await serviceCollection.findOne({ _id: new ObjectId(booking.service_id) });
+            console.log(bookingService);
+            const transactionId = new ObjectId().toString()
+            const data = {
+                total_amount: bookingService.price,
+                currency: booking.currency,
+                tran_id: transactionId, // use unique tran_id for each api call
+                success_url: `http://localhost:5000/payment/success?transactionId=${transactionId}`,
+                fail_url: `http://localhost:5000/payment/fail?transactionId=${transactionId}`,
+                cancel_url: 'http://localhost:5000/payment/cancel',
+                ipn_url: 'http://localhost:3030/ipn',
+                shipping_method: 'Courier',
+                product_name: booking.service,
+                product_category: 'Electronic',
+                product_profile: 'general',
+                cus_name: booking.customerName,
+                cus_email: booking.email,
+                cus_add1: booking.message,
+                cus_add2: 'Dhaka',
+                cus_city: 'Dhaka',
+                cus_state: 'Dhaka',
+                cus_postcode: '1000',
+                cus_country: 'Bangladesh',
+                cus_phone: booking.phone,
+                cus_fax: '01711111111',
+                ship_name: 'Customer Name',
+                ship_add1: 'Dhaka',
+                ship_add2: 'Dhaka',
+                ship_city: 'Dhaka',
+                ship_state: 'Dhaka',
+                ship_postcode: booking.postCode,
+                ship_country: 'Bangladesh',
+            };
+
+            const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live)
+            sslcz.init(data).then(apiResponse => {
+                // Redirect the user to payment gateway
+                let GatewayPageURL = apiResponse.GatewayPageURL
+                bookingCollection.insertOne({
+                    ...booking,
+                    price: bookingService.price,
+                    transactionId,
+                    paid: false
+                })
+                res.send({ url: GatewayPageURL })
+                // console.log('Redirecting to: ', GatewayPageURL)
+            });
         })
 
+        app.get('/booking/by-transaction-id/:id', async (req, res) => {
+            const { id } = req.params;
+            const booking = await bookingCollection.findOne({ transactionId: id })
+            res.send(booking)
+        })
+        app.post('/payment/success', async (req, res) => {
+            const { transactionId } = req.query;
+            if (!transactionId) {
+                return res.redirect(`http://localhost:5173/payment/fail?transactionId=${transactionId}`)
+            }
+            const result = await bookingCollection.updateOne({ transactionId }, { $set: { paid: true, paidAt: new Date() } })
+            if (result.modifiedCount > 0) {
+                res.redirect(`http://localhost:5173/payment/success?transactionId=${transactionId}`)
+            }
+        })
+        app.post('/payment/fail', async (req, res) => {
+            const { transactionId } = req.query;
+            if (!transactionId) {
+                return res.redirect(`http://localhost:5173/payment/fail?transactionId=${transactionId}`)
+            }
+            const result = await bookingCollection.deleteOne({ transactionId })
+            if (result.deletedCount) {
+                res.redirect(`http://localhost:5173/payment/fail?transactionId=${transactionId}`)
+            }
+        })
         // app.get('/booking', async (req, res) => {
         //     const result = await bookingCollection.find().toArray();
         //     res.send(result)
